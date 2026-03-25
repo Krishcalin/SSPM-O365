@@ -157,21 +157,21 @@
     <!-- Description line -->
     <text x="310" y="250" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
           font-size="14" font-weight="300" fill="#6b8daa" letter-spacing="0.3">
-      Live tenant assessment via Microsoft Graph API  |  Read-only  |  20 check groups  |  75+ security rules
+      Live tenant assessment via Microsoft Graph API  |  Read-only  |  24 check groups  |  87+ security rules
     </text>
 
     <!-- ═══════════ Stat badges ═══════════ -->
     <!-- Badge: Check Groups -->
     <g transform="translate(310, 278)">
       <rect width="130" height="36" rx="8" fill="#0078d4" opacity="0.15" stroke="#0078d4" stroke-width="0.8"/>
-      <text x="14" y="23" font-family="'Segoe UI', Arial, sans-serif" font-size="22" font-weight="700" fill="#50e6ff">20</text>
+      <text x="14" y="23" font-family="'Segoe UI', Arial, sans-serif" font-size="22" font-weight="700" fill="#50e6ff">24</text>
       <text x="46" y="23" font-family="'Segoe UI', Arial, sans-serif" font-size="12" font-weight="400" fill="#7eb8da">Check Groups</text>
     </g>
 
     <!-- Badge: Rules -->
     <g transform="translate(454, 278)">
       <rect width="110" height="36" rx="8" fill="#0078d4" opacity="0.15" stroke="#0078d4" stroke-width="0.8"/>
-      <text x="14" y="23" font-family="'Segoe UI', Arial, sans-serif" font-size="22" font-weight="700" fill="#50e6ff">75+</text>
+      <text x="14" y="23" font-family="'Segoe UI', Arial, sans-serif" font-size="22" font-weight="700" fill="#50e6ff">87+</text>
       <text x="56" y="23" font-family="'Segoe UI', Arial, sans-serif" font-size="12" font-weight="400" fill="#7eb8da">Rules</text>
     </g>
 
@@ -185,7 +185,7 @@
     <!-- Badge: Version -->
     <g transform="translate(702, 278)">
       <rect width="100" height="36" rx="8" fill="#0078d4" opacity="0.15" stroke="#0078d4" stroke-width="0.8"/>
-      <text x="14" y="23" font-family="'Segoe UI', Arial, sans-serif" font-size="13" font-weight="600" fill="#50e6ff">v2.0.0</text>
+      <text x="14" y="23" font-family="'Segoe UI', Arial, sans-serif" font-size="13" font-weight="600" fill="#50e6ff">v2.1.0</text>
     </g>
 
     <!-- ═══════════ Right side: Service icons as text badges ═══════════ -->

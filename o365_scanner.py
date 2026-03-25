@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Microsoft 365 SSPM Scanner v2.0.0
+Microsoft 365 SSPM Scanner v2.1.0
 SaaS Security Posture Management scanner for Microsoft 365 tenants.
 
 Performs live Microsoft Graph API checks across:
@@ -17,6 +17,16 @@ Performs live Microsoft Graph API checks across:
   - Token & Session Policies — sign-in frequency, persistent browser
   - Cross-Tenant Access — B2B collaboration, trust settings
   - Admin Consent & OAuth Governance — consent workflow, risky apps
+  - Authentication Strengths — phishing-resistant MFA, FIDO2/CBA enforcement
+  - Entra ID Governance — access reviews, entitlement management
+  - Named Locations — trusted IP/country audit, overly broad definitions
+  - Stale Users — inactive accounts, disabled accounts with role assignments
+
+Compliance Framework Mapping (per finding):
+  CIS Microsoft 365 Foundations Benchmark v3.1.0
+  NIST SP 800-53 Rev 5
+  ISO/IEC 27001:2022
+  SOC 2 Type II Trust Services Criteria
 
 Authentication: OAuth 2.0 Client Credentials (app-only, no user required)
   1. Register an app in Entra ID (App Registrations)
@@ -43,6 +53,8 @@ Required Microsoft Graph Application Permissions (read-only):
   InformationProtectionPolicy.Read.All    -- DLP, sensitivity labels
   CrossTenantInformation.ReadBasic.All    -- Cross-tenant access
   Policy.Read.ConditionalAccess      -- Token lifetime policies
+  AccessReview.Read.All              -- Access reviews (Entra ID Governance)
+  EntitlementManagement.Read.All     -- Entitlement management packages
 
 Usage:
   python o365_scanner.py \\
@@ -67,7 +79,7 @@ try:
 except ImportError:
     HAS_REQUESTS = False
 
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 
 # ============================================================
 # Microsoft Graph API constants
@@ -115,6 +127,126 @@ HIGH_RISK_PERMISSION_IDS = {
     "9a5d68dd-52b0-4cc2-bd40-abcf44ac3a30": "Application.ReadWrite.OwnedBy",
 }
 
+# ============================================================
+# Compliance Framework Mapping
+# Maps rule_id → { framework: control_id }
+# Frameworks: CIS M365 v3.1.0, NIST 800-53 Rev5, ISO 27001:2022, SOC 2
+# ============================================================
+COMPLIANCE_MAP: dict[str, dict[str, str]] = {
+    # ── Security Baseline ──
+    "M365-SEC-001": {"cis_m365": "1.1.1",  "nist_800_53": "AC-6, CM-6",    "iso_27001": "A.8.2",   "soc2": "CC6.1"},
+    "M365-SEC-002": {"cis_m365": "1.1.1",  "nist_800_53": "CM-6",          "iso_27001": "A.8.2",   "soc2": "CC6.1"},
+    # ── Conditional Access ──
+    "M365-CA-001":  {"cis_m365": "1.2.1",  "nist_800_53": "AC-2, AC-3",    "iso_27001": "A.8.3",   "soc2": "CC6.1, CC6.3"},
+    "M365-CA-002":  {"cis_m365": "1.2.1",  "nist_800_53": "AC-3",          "iso_27001": "A.8.3",   "soc2": "CC6.1"},
+    "M365-CA-003":  {"cis_m365": "1.2.1",  "nist_800_53": "AC-3",          "iso_27001": "A.8.3",   "soc2": "CC6.1"},
+    "M365-CA-004":  {"cis_m365": "1.2.2",  "nist_800_53": "IA-2(1)",       "iso_27001": "A.8.5",   "soc2": "CC6.1, CC6.2"},
+    "M365-CA-005":  {"cis_m365": "1.2.3",  "nist_800_53": "IA-2(1), AC-6", "iso_27001": "A.8.5",   "soc2": "CC6.1, CC6.2"},
+    "M365-CA-006":  {"cis_m365": "1.2.4",  "nist_800_53": "AC-17(2)",      "iso_27001": "A.8.5",   "soc2": "CC6.1"},
+    "M365-CA-007":  {"cis_m365": "1.2.5",  "nist_800_53": "SI-4, AC-7",    "iso_27001": "A.8.16",  "soc2": "CC6.1, CC7.2"},
+    "M365-CA-008":  {"cis_m365": "1.2.6",  "nist_800_53": "AC-19",         "iso_27001": "A.8.1",   "soc2": "CC6.1, CC6.6"},
+    "M365-CA-009":  {"cis_m365": "1.2.7",  "nist_800_53": "AC-2(5)",       "iso_27001": "A.8.3",   "soc2": "CC6.1"},
+    # ── Multi-Factor Authentication ──
+    "M365-MFA-001": {"cis_m365": "1.3.1",  "nist_800_53": "IA-2(1)",       "iso_27001": "A.8.5",   "soc2": "CC6.1, CC6.2"},
+    "M365-MFA-002": {"cis_m365": "1.3.2",  "nist_800_53": "IA-2(1), AC-6", "iso_27001": "A.8.5",   "soc2": "CC6.1, CC6.2"},
+    "M365-MFA-003": {"cis_m365": "1.3.3",  "nist_800_53": "IA-2(12)",      "iso_27001": "A.8.5",   "soc2": "CC6.1"},
+    "M365-MFA-004": {"cis_m365": "1.3.4",  "nist_800_53": "IA-5(1)",       "iso_27001": "A.8.5",   "soc2": "CC6.1"},
+    # ── Privileged Access ──
+    "M365-PRIV-001":{"cis_m365": "1.4.1",  "nist_800_53": "AC-6(5)",       "iso_27001": "A.8.2",   "soc2": "CC6.1, CC6.3"},
+    "M365-PRIV-002":{"cis_m365": "1.4.2",  "nist_800_53": "AC-6(5)",       "iso_27001": "A.8.2",   "soc2": "CC6.1, CC6.3"},
+    "M365-PRIV-003":{"cis_m365": "1.4.3",  "nist_800_53": "AC-6(5)",       "iso_27001": "A.8.2",   "soc2": "CC6.1, CC6.3"},
+    "M365-PRIV-004":{"cis_m365": "1.4.4",  "nist_800_53": "AC-2(3)",       "iso_27001": "A.8.2",   "soc2": "CC6.1, CC6.2"},
+    "M365-PRIV-005":{"cis_m365": "1.4.5",  "nist_800_53": "AC-2(2)",       "iso_27001": "A.5.16",  "soc2": "CC6.1"},
+    # ── Password Policy ──
+    "M365-PWD-001": {"cis_m365": "1.5.1",  "nist_800_53": "IA-5(1)",       "iso_27001": "A.8.5",   "soc2": "CC6.1"},
+    "M365-PWD-002": {"cis_m365": "1.5.2",  "nist_800_53": "IA-5(1)",       "iso_27001": "A.8.5",   "soc2": "CC6.1"},
+    "M365-PWD-003": {"cis_m365": "1.5.3",  "nist_800_53": "IA-5(1)",       "iso_27001": "A.8.5",   "soc2": "CC6.1"},
+    # ── Application Security ──
+    "M365-APP-001": {"cis_m365": "2.1.1",  "nist_800_53": "AC-6, CM-7",    "iso_27001": "A.8.9",   "soc2": "CC6.1, CC6.3"},
+    "M365-APP-002": {"cis_m365": "2.1.2",  "nist_800_53": "IA-5(7)",       "iso_27001": "A.8.9",   "soc2": "CC6.1"},
+    "M365-APP-003": {"cis_m365": "2.1.3",  "nist_800_53": "IA-5(7)",       "iso_27001": "A.8.9",   "soc2": "CC6.1"},
+    "M365-APP-004": {"cis_m365": "2.1.4",  "nist_800_53": "IA-5(2)",       "iso_27001": "A.8.9",   "soc2": "CC6.1"},
+    "M365-APP-005": {"cis_m365": "2.1.5",  "nist_800_53": "CM-8",          "iso_27001": "A.8.9",   "soc2": "CC6.1"},
+    # ── Guest Access ──
+    "M365-GUEST-001":{"cis_m365": "2.2.1", "nist_800_53": "AC-2(7)",       "iso_27001": "A.5.19",  "soc2": "CC6.1, CC6.2"},
+    "M365-GUEST-002":{"cis_m365": "2.2.2", "nist_800_53": "AC-2(7)",       "iso_27001": "A.5.19",  "soc2": "CC6.1"},
+    "M365-GUEST-003":{"cis_m365": "2.2.3", "nist_800_53": "AC-2(7)",       "iso_27001": "A.5.19",  "soc2": "CC6.1"},
+    "M365-GUEST-004":{"cis_m365": "2.2.4", "nist_800_53": "AC-2(3)",       "iso_27001": "A.5.19",  "soc2": "CC6.1, CC6.2"},
+    # ── Exchange Online ──
+    "M365-EXO-001": {"cis_m365": "3.1.1",  "nist_800_53": "SI-2, IR-6",    "iso_27001": "A.5.24",  "soc2": "CC7.3"},
+    "M365-EXO-002": {"cis_m365": "3.1.2",  "nist_800_53": "SC-7, AC-4",    "iso_27001": "A.8.12",  "soc2": "CC6.1, CC6.6"},
+    "M365-EXO-003": {"cis_m365": "3.1.3",  "nist_800_53": "AC-17(2)",      "iso_27001": "A.8.5",   "soc2": "CC6.1"},
+    "M365-EXO-004": {"cis_m365": "3.1.4",  "nist_800_53": "AC-17(2)",      "iso_27001": "A.8.5",   "soc2": "CC6.1"},
+    # ── SharePoint Online ──
+    "M365-SPO-001": {"cis_m365": "3.2.1",  "nist_800_53": "AC-3, AC-4",    "iso_27001": "A.8.12",  "soc2": "CC6.1, CC6.6"},
+    "M365-SPO-002": {"cis_m365": "3.2.2",  "nist_800_53": "AC-3",          "iso_27001": "A.8.12",  "soc2": "CC6.1"},
+    "M365-SPO-003": {"cis_m365": "3.2.3",  "nist_800_53": "AC-3",          "iso_27001": "A.8.12",  "soc2": "CC6.1"},
+    "M365-SPO-004": {"cis_m365": "3.2.4",  "nist_800_53": "AC-17(2)",      "iso_27001": "A.8.5",   "soc2": "CC6.1"},
+    # ── OneDrive ──
+    "M365-OD-001":  {"cis_m365": "3.3.1",  "nist_800_53": "AC-19, MP-7",   "iso_27001": "A.8.1",   "soc2": "CC6.1, CC6.7"},
+    "M365-OD-002":  {"cis_m365": "3.3.2",  "nist_800_53": "AC-3, AC-4",    "iso_27001": "A.8.12",  "soc2": "CC6.1"},
+    "M365-OD-003":  {"cis_m365": "3.3.3",  "nist_800_53": "AU-11, SI-12",  "iso_27001": "A.8.10",  "soc2": "CC6.1, A1.2"},
+    # ── Teams ──
+    "M365-TEAMS-001":{"cis_m365": "3.4.1", "nist_800_53": "AC-3",          "iso_27001": "A.8.3",   "soc2": "CC6.1"},
+    "M365-TEAMS-002":{"cis_m365": "3.4.2", "nist_800_53": "AC-4",          "iso_27001": "A.8.12",  "soc2": "CC6.1, CC6.6"},
+    "M365-TEAMS-003":{"cis_m365": "3.4.3", "nist_800_53": "AC-2(7)",       "iso_27001": "A.5.19",  "soc2": "CC6.1"},
+    # ── Audit Logging ──
+    "M365-AUDIT-001":{"cis_m365": "4.1.1", "nist_800_53": "AU-2, AU-3",    "iso_27001": "A.8.15",  "soc2": "CC7.1, CC7.2"},
+    "M365-AUDIT-002":{"cis_m365": "4.1.2", "nist_800_53": "AU-11, AU-4",   "iso_27001": "A.8.15",  "soc2": "CC7.1, A1.2"},
+    "M365-AUDIT-003":{"cis_m365": "4.1.3", "nist_800_53": "AU-2, AU-12",   "iso_27001": "A.8.15",  "soc2": "CC7.1, CC7.2"},
+    # ── Identity Protection ──
+    "M365-IDP-001": {"cis_m365": "1.6.1",  "nist_800_53": "SI-4, AC-7",    "iso_27001": "A.8.16",  "soc2": "CC6.1, CC7.2"},
+    "M365-IDP-002": {"cis_m365": "1.6.2",  "nist_800_53": "SI-4, AC-7",    "iso_27001": "A.8.16",  "soc2": "CC6.1, CC7.2"},
+    "M365-IDP-003": {"cis_m365": "1.6.3",  "nist_800_53": "SI-4",          "iso_27001": "A.8.16",  "soc2": "CC7.2"},
+    "M365-IDP-004": {"cis_m365": "1.6.4",  "nist_800_53": "SI-4",          "iso_27001": "A.8.16",  "soc2": "CC7.2"},
+    "M365-IDP-005": {"cis_m365": "1.6.5",  "nist_800_53": "SI-4",          "iso_27001": "A.8.16",  "soc2": "CC7.2"},
+    # ── Secure Score ──
+    "M365-SCORE-001":{"cis_m365": "5.1.1", "nist_800_53": "CA-7",          "iso_27001": "A.8.8",   "soc2": "CC4.1"},
+    "M365-SCORE-002":{"cis_m365": "5.1.2", "nist_800_53": "CA-7",          "iso_27001": "A.8.8",   "soc2": "CC4.1"},
+    # ── Intune ──
+    "M365-INTUNE-001":{"cis_m365":"5.2.1", "nist_800_53": "CM-6, AC-19",   "iso_27001": "A.8.1",   "soc2": "CC6.1, CC6.6"},
+    "M365-INTUNE-002":{"cis_m365":"5.2.2", "nist_800_53": "CM-6",          "iso_27001": "A.8.1",   "soc2": "CC6.6"},
+    "M365-INTUNE-003":{"cis_m365":"5.2.3", "nist_800_53": "CM-6, SI-2",    "iso_27001": "A.8.1",   "soc2": "CC6.1, CC6.6"},
+    "M365-INTUNE-004":{"cis_m365":"5.2.4", "nist_800_53": "CM-8",          "iso_27001": "A.8.1",   "soc2": "CC6.1"},
+    # ── Data Loss Prevention ──
+    "M365-DLP-001": {"cis_m365": "5.3.1",  "nist_800_53": "SC-28, MP-5",   "iso_27001": "A.8.11",  "soc2": "CC6.1, CC6.7"},
+    "M365-DLP-002": {"cis_m365": "5.3.2",  "nist_800_53": "SC-28",         "iso_27001": "A.8.11",  "soc2": "CC6.1"},
+    "M365-DLP-003": {"cis_m365": "5.3.3",  "nist_800_53": "AC-4, SC-7",    "iso_27001": "A.8.12",  "soc2": "CC6.1, CC6.6"},
+    # ── Defender for Office 365 ──
+    "M365-MDO-001": {"cis_m365": "3.5.1",  "nist_800_53": "SI-3, SI-8",    "iso_27001": "A.8.7",   "soc2": "CC6.8, CC7.1"},
+    "M365-MDO-002": {"cis_m365": "3.5.2",  "nist_800_53": "SI-3",          "iso_27001": "A.8.7",   "soc2": "CC6.8"},
+    "M365-MDO-003": {"cis_m365": "3.5.3",  "nist_800_53": "SI-3",          "iso_27001": "A.8.7",   "soc2": "CC6.8"},
+    "M365-MDO-004": {"cis_m365": "3.5.4",  "nist_800_53": "SI-3, SI-4",    "iso_27001": "A.8.7",   "soc2": "CC6.8, CC7.1"},
+    # ── Session Security ──
+    "M365-SESSION-001":{"cis_m365":"1.7.1","nist_800_53": "AC-12, SC-23",   "iso_27001": "A.8.5",   "soc2": "CC6.1"},
+    "M365-SESSION-002":{"cis_m365":"1.7.2","nist_800_53": "AC-12",          "iso_27001": "A.8.5",   "soc2": "CC6.1"},
+    "M365-SESSION-003":{"cis_m365":"1.7.3","nist_800_53": "AC-12, SC-23",   "iso_27001": "A.8.5",   "soc2": "CC6.1"},
+    # ── Cross-Tenant Access ──
+    "M365-XTA-001": {"cis_m365": "2.3.1",  "nist_800_53": "IA-8, AC-17",   "iso_27001": "A.5.19",  "soc2": "CC6.1, CC6.2"},
+    "M365-XTA-002": {"cis_m365": "2.3.2",  "nist_800_53": "IA-8",          "iso_27001": "A.5.19",  "soc2": "CC6.1"},
+    "M365-XTA-003": {"cis_m365": "2.3.3",  "nist_800_53": "AC-4, AC-20",   "iso_27001": "A.5.19",  "soc2": "CC6.1, CC6.6"},
+    # ── OAuth App Governance ──
+    "M365-CONSENT-001":{"cis_m365":"2.4.1","nist_800_53": "CM-7, AC-3",     "iso_27001": "A.8.9",   "soc2": "CC6.1, CC6.3"},
+    "M365-CONSENT-002":{"cis_m365":"2.4.2","nist_800_53": "CM-7",           "iso_27001": "A.8.9",   "soc2": "CC6.1"},
+    "M365-CONSENT-003":{"cis_m365":"2.4.3","nist_800_53": "CM-7, SA-12",    "iso_27001": "A.8.9",   "soc2": "CC6.1, CC6.3"},
+    # ── v2.1.0: Authentication Strengths ──
+    "M365-AUTH-001": {"cis_m365": "1.3.5",  "nist_800_53": "IA-2(6)",       "iso_27001": "A.8.5",   "soc2": "CC6.1, CC6.2"},
+    "M365-AUTH-002": {"cis_m365": "1.3.6",  "nist_800_53": "IA-2(6)",       "iso_27001": "A.8.5",   "soc2": "CC6.1, CC6.2"},
+    "M365-AUTH-003": {"cis_m365": "1.3.7",  "nist_800_53": "IA-2(12)",      "iso_27001": "A.8.5",   "soc2": "CC6.1"},
+    # ── v2.1.0: Entra ID Governance ──
+    "M365-GOV-001":  {"cis_m365": "1.8.1",  "nist_800_53": "AC-2(3)",       "iso_27001": "A.5.18",  "soc2": "CC6.1, CC6.2"},
+    "M365-GOV-002":  {"cis_m365": "1.8.2",  "nist_800_53": "AC-2(3)",       "iso_27001": "A.5.18",  "soc2": "CC6.1, CC6.2"},
+    "M365-GOV-003":  {"cis_m365": "1.8.3",  "nist_800_53": "AC-2, PE-2",    "iso_27001": "A.5.18",  "soc2": "CC6.2, CC6.3"},
+    # ── v2.1.0: Named Locations ──
+    "M365-LOC-001":  {"cis_m365": "1.9.1",  "nist_800_53": "AC-2(5)",       "iso_27001": "A.8.3",   "soc2": "CC6.1"},
+    "M365-LOC-002":  {"cis_m365": "1.9.2",  "nist_800_53": "AC-2(5)",       "iso_27001": "A.8.3",   "soc2": "CC6.1"},
+    "M365-LOC-003":  {"cis_m365": "1.9.3",  "nist_800_53": "AC-2(5)",       "iso_27001": "A.8.3",   "soc2": "CC6.1"},
+    # ── v2.1.0: Stale Users ──
+    "M365-STALE-001":{"cis_m365": "1.10.1", "nist_800_53": "AC-2(3)",       "iso_27001": "A.5.18",  "soc2": "CC6.1, CC6.2"},
+    "M365-STALE-002":{"cis_m365": "1.10.2", "nist_800_53": "AC-2(3), AC-6", "iso_27001": "A.5.18",  "soc2": "CC6.1, CC6.3"},
+    "M365-STALE-003":{"cis_m365": "1.10.3", "nist_800_53": "AC-2",          "iso_27001": "A.5.18",  "soc2": "CC6.1"},
+}
+
 
 # ============================================================
 # Finding data class  (identical schema to all other scanners)
@@ -134,9 +266,10 @@ class Finding:
         self.recommendation = recommendation
         self.cwe = cwe or ""
         self.cve = cve or ""
+        self.compliance = COMPLIANCE_MAP.get(rule_id, {})
 
     def to_dict(self):
-        return {
+        d = {
             "id": self.rule_id,
             "name": self.name,
             "category": self.category,
@@ -149,6 +282,9 @@ class Finding:
             "cwe": self.cwe,
             "cve": self.cve,
         }
+        if self.compliance:
+            d["compliance"] = self.compliance
+        return d
 
 
 # ============================================================
@@ -207,7 +343,7 @@ class O365Scanner:
         self._check_teams_security()
         self._check_audit_logging()
 
-        # ── v2.0.0 New Checks ──
+        # ── v2.0.0 Checks ──
         self._check_secure_score()
         self._check_intune_compliance()
         self._check_dlp_and_labels()
@@ -215,6 +351,12 @@ class O365Scanner:
         self._check_token_session_policies()
         self._check_cross_tenant_access()
         self._check_admin_consent_workflow()
+
+        # ── v2.1.0 New Checks ──
+        self._check_authentication_strengths()
+        self._check_entra_governance()
+        self._check_named_locations()
+        self._check_stale_users()
 
     # ----------------------------------------------------------
     # OAuth 2.0 Authentication (Client Credentials)
@@ -2713,6 +2855,549 @@ class O365Scanner:
                 cwe="CWE-284",
             ))
 
+    # ==========================================================
+    #  v2.1.0 — NEW CHECK GROUPS
+    # ==========================================================
+
+    # ----------------------------------------------------------
+    # 21. Authentication Strengths
+    # ----------------------------------------------------------
+    def _check_authentication_strengths(self):
+        self._vprint("  [check] Authentication strengths …")
+
+        # Get authentication strength policies
+        strengths = self._graph_get(
+            "policies/authenticationStrengthPolicies",
+            params={"$select": "id,displayName,policyType,requirementsSatisfied,allowedCombinations"},
+        )
+        if not strengths:
+            self._vprint("  [skip] Authentication strength policies not accessible.")
+            return
+
+        # Check if any CA policy uses phishing-resistant auth strength
+        ca_policies = self._graph_get("identity/conditionalAccessPolicies")
+        enabled_ca = [p for p in ca_policies if p.get("state") == "enabled"]
+
+        has_phishing_resistant_ca = False
+        has_any_auth_strength_ca = False
+
+        for p in enabled_ca:
+            grant = p.get("grantControls") or {}
+            auth_strength = grant.get("authenticationStrength") or {}
+            if auth_strength.get("id"):
+                has_any_auth_strength_ca = True
+                # Check if the referenced strength is phishing-resistant
+                strength_id = auth_strength["id"]
+                for s in strengths:
+                    if s.get("id") == strength_id:
+                        combos = s.get("allowedCombinations", []) or []
+                        # Phishing-resistant = only FIDO2, CBA, or Windows Hello
+                        phishing_resistant_methods = {
+                            "fido2", "x509CertificateMultiFactor",
+                            "x509CertificateSingleFactor",
+                            "windowsHelloForBusiness",
+                        }
+                        all_combos_resistant = all(
+                            any(pr in combo.lower() for pr in phishing_resistant_methods)
+                            for combo in combos
+                        ) if combos else False
+                        if all_combos_resistant:
+                            has_phishing_resistant_ca = True
+
+        if not has_any_auth_strength_ca:
+            self._add(Finding(
+                rule_id="M365-AUTH-001",
+                name="No Conditional Access policy uses authentication strength controls",
+                category="Authentication Strengths",
+                severity="HIGH",
+                file_path="policies/authenticationStrengthPolicies",
+                line_num=None,
+                line_content="Authentication strength in CA policies = none",
+                description=(
+                    "No enforced Conditional Access policy uses the Authentication Strength "
+                    "grant control. Authentication Strength allows you to require specific "
+                    "combinations of MFA methods (e.g., only FIDO2, only certificate-based "
+                    "auth) instead of accepting any MFA method. Without it, weaker MFA "
+                    "methods like SMS OTP satisfy MFA requirements."
+                ),
+                recommendation=(
+                    "Create a CA policy for admin accounts using the built-in 'Phishing-resistant "
+                    "MFA' authentication strength. This restricts MFA to FIDO2 security keys, "
+                    "certificate-based auth, or Windows Hello for Business — all phishing-resistant. "
+                    "Entra ID > Protection > Authentication Strengths."
+                ),
+                cwe="CWE-308",
+            ))
+        elif not has_phishing_resistant_ca:
+            self._add(Finding(
+                rule_id="M365-AUTH-002",
+                name="No CA policy enforces phishing-resistant MFA (FIDO2/CBA)",
+                category="Authentication Strengths",
+                severity="MEDIUM",
+                file_path="policies/authenticationStrengthPolicies",
+                line_num=None,
+                line_content="Phishing-resistant auth strength in CA = not found",
+                description=(
+                    "CA policies use authentication strength controls, but none enforce "
+                    "phishing-resistant methods exclusively. Phishing-resistant MFA (FIDO2, "
+                    "certificate-based auth, Windows Hello) cannot be intercepted by "
+                    "adversary-in-the-middle (AitM) attacks that defeat push notifications "
+                    "and TOTP codes."
+                ),
+                recommendation=(
+                    "For admin and privileged accounts, create a CA policy with the "
+                    "'Phishing-resistant MFA' authentication strength. For all users, "
+                    "consider a migration roadmap from SMS/TOTP to FIDO2 or CBA. "
+                    "AitM phishing toolkits (evilginx, modlishka) can bypass standard MFA."
+                ),
+                cwe="CWE-308",
+            ))
+
+        # Check authentication methods policy for weak methods still enabled
+        methods_policy = self._graph_get(
+            "policies/authenticationMethodsPolicy/authenticationMethodConfigurations",
+        )
+        if methods_policy:
+            weak_enabled = []
+            for m in methods_policy:
+                method_id = m.get("id", "")
+                state = m.get("state", "")
+                # Flag SMS and voice as weak if enabled for all users
+                if method_id in ("Sms", "Voice") and state == "enabled":
+                    target_type = ""
+                    include_targets = m.get("includeTargets", []) or []
+                    for t in include_targets:
+                        if t.get("targetType") == "group" and t.get("id") == "all_users":
+                            target_type = "all users"
+                            break
+                    if target_type:
+                        weak_enabled.append(f"{method_id} (enabled for {target_type})")
+
+            if weak_enabled:
+                self._add(Finding(
+                    rule_id="M365-AUTH-003",
+                    name=f"Weak authentication methods enabled: {', '.join(weak_enabled)}",
+                    category="Authentication Strengths",
+                    severity="MEDIUM",
+                    file_path="policies/authenticationMethodsPolicy",
+                    line_num=None,
+                    line_content=f"Weak methods: {', '.join(weak_enabled)}",
+                    description=(
+                        "SMS and/or Voice Call authentication methods are enabled for all users. "
+                        "These methods are vulnerable to SIM-swapping, SS7 interception, and "
+                        "social engineering of mobile carriers. NIST SP 800-63B restricts SMS "
+                        "OTP and CISA recommends migrating away from telephony-based MFA."
+                    ),
+                    recommendation=(
+                        "Disable SMS and Voice for all users in Entra ID > Authentication Methods. "
+                        "Migrate to Microsoft Authenticator, FIDO2, or certificate-based auth. "
+                        "If SMS must remain for a transition period, restrict it to a small "
+                        "group and set a migration deadline."
+                    ),
+                    cwe="CWE-308",
+                ))
+
+    # ----------------------------------------------------------
+    # 22. Entra ID Governance
+    # ----------------------------------------------------------
+    def _check_entra_governance(self):
+        self._vprint("  [check] Entra ID Governance …")
+
+        # Check Access Reviews
+        access_reviews = self._graph_get(
+            "identityGovernance/accessReviews/definitions",
+            params={
+                "$select": "id,displayName,status,scope,settings,createdDateTime",
+                "$top": 100,
+            },
+        )
+
+        if not access_reviews:
+            self._add(Finding(
+                rule_id="M365-GOV-001",
+                name="No Access Reviews configured in Entra ID Governance",
+                category="Entra ID Governance",
+                severity="HIGH",
+                file_path="identityGovernance/accessReviews/definitions",
+                line_num=None,
+                line_content="Access Review definitions = 0",
+                description=(
+                    "No Access Reviews are configured. Access Reviews automate the periodic "
+                    "recertification of user access to groups, applications, and roles. "
+                    "Without them, stale permissions accumulate over time — users who change "
+                    "roles, leave projects, or terminate employment retain access indefinitely "
+                    "unless manually revoked."
+                ),
+                recommendation=(
+                    "Create Access Reviews in Entra ID > Identity Governance > Access Reviews: "
+                    "1. Review all privileged role assignments (quarterly) "
+                    "2. Review guest user access (quarterly) "
+                    "3. Review group memberships for sensitive groups (semi-annually) "
+                    "4. Auto-remove access if reviewer does not respond within 14 days."
+                ),
+                cwe="CWE-269",
+            ))
+        else:
+            # Check if any review covers privileged roles
+            has_priv_review = False
+            for r in access_reviews:
+                scope = r.get("scope", {}) or {}
+                resource_scopes = scope.get("resourceScopes", []) or []
+                principal_scopes = scope.get("principalScopes", []) or []
+                # Check if scope targets directory roles
+                for rs in resource_scopes + principal_scopes:
+                    if "directoryRole" in str(rs).lower() or "privileged" in str(rs).lower():
+                        has_priv_review = True
+                        break
+
+            if not has_priv_review:
+                self._add(Finding(
+                    rule_id="M365-GOV-002",
+                    name="No Access Review covers privileged directory roles",
+                    category="Entra ID Governance",
+                    severity="HIGH",
+                    file_path="identityGovernance/accessReviews/definitions",
+                    line_num=None,
+                    line_content=f"Total reviews = {len(access_reviews)}, privileged role reviews = 0",
+                    description=(
+                        f"{len(access_reviews)} Access Review(s) exist, but none appear to review "
+                        "privileged directory role assignments (Global Admin, Security Admin, etc.). "
+                        "Privileged access is the highest-value target — role assignments must be "
+                        "reviewed regularly to detect orphaned or unnecessary admin rights."
+                    ),
+                    recommendation=(
+                        "Create an Access Review targeting 'Privileged Role assignments' with: "
+                        "Scope = All privileged directory roles, Frequency = quarterly, "
+                        "Reviewers = role owners or designated security reviewers, "
+                        "Auto-action = Remove access if not reviewed in 14 days."
+                    ),
+                    cwe="CWE-269",
+                ))
+
+        # Check Entitlement Management — access packages
+        access_packages = self._graph_get(
+            "identityGovernance/entitlementManagement/accessPackages",
+            params={
+                "$select": "id,displayName,isHidden,createdDateTime",
+                "$top": 50,
+            },
+        )
+        if not access_packages:
+            self._add(Finding(
+                rule_id="M365-GOV-003",
+                name="No Entitlement Management access packages configured",
+                category="Entra ID Governance",
+                severity="MEDIUM",
+                file_path="identityGovernance/entitlementManagement/accessPackages",
+                line_num=None,
+                line_content="Access packages = 0",
+                description=(
+                    "No Entitlement Management access packages are configured. Access packages "
+                    "bundle groups, apps, and SharePoint sites into requestable bundles with "
+                    "approval workflows, time limits, and automatic expiry. Without them, "
+                    "access provisioning is manual, inconsistent, and lacks governance controls."
+                ),
+                recommendation=(
+                    "Create access packages in Entra ID > Identity Governance > "
+                    "Entitlement Management for common access scenarios: "
+                    "1. New employee onboarding (role-based access bundles) "
+                    "2. Project-based access (time-limited, with approval) "
+                    "3. External collaborator access (with automatic expiry) "
+                    "Configure approval workflows and periodic access reviews per package."
+                ),
+                cwe="CWE-284",
+            ))
+
+    # ----------------------------------------------------------
+    # 23. Named Locations
+    # ----------------------------------------------------------
+    def _check_named_locations(self):
+        self._vprint("  [check] Named locations …")
+
+        locations = self._graph_get(
+            "identity/conditionalAccess/namedLocations",
+            params={"$select": "id,displayName,createdDateTime,modifiedDateTime"},
+        )
+
+        if not locations:
+            self._add(Finding(
+                rule_id="M365-LOC-001",
+                name="No named locations defined for Conditional Access",
+                category="Named Locations",
+                severity="MEDIUM",
+                file_path="identity/conditionalAccess/namedLocations",
+                line_num=None,
+                line_content="Named locations = 0",
+                description=(
+                    "No named locations are defined in the tenant. Named locations allow you "
+                    "to define trusted IP ranges (corporate offices, VPNs) and trusted countries "
+                    "for use in Conditional Access policies. Without them, location-based "
+                    "access controls cannot differentiate between corporate and external access."
+                ),
+                recommendation=(
+                    "Define named locations in Entra ID > Protection > Named Locations: "
+                    "1. Create IP-based locations for corporate offices and VPN egress IPs "
+                    "2. Create country-based locations for allowed operating countries "
+                    "3. Mark corporate IP locations as 'trusted' for MFA bypass scenarios "
+                    "4. Use these in CA policies to require MFA from untrusted locations."
+                ),
+                cwe="CWE-284",
+            ))
+            return
+
+        # Fetch full details for each location (need to check IP/country specifics)
+        trusted_count = 0
+        overly_broad_ips = []
+        country_locations = []
+
+        for loc in locations:
+            loc_id = loc.get("id", "")
+            # Re-fetch with full detail
+            detail = self._graph_get_single(
+                f"identity/conditionalAccess/namedLocations/{loc_id}",
+            )
+            if not detail:
+                continue
+
+            odata_type = detail.get("@odata.type", "")
+            name = detail.get("displayName", "?")
+
+            if "ipNamedLocation" in odata_type:
+                is_trusted = detail.get("isTrusted", False)
+                if is_trusted:
+                    trusted_count += 1
+                ip_ranges = detail.get("ipRanges", []) or []
+                for ipr in ip_ranges:
+                    cidr = ipr.get("cidrAddress", "")
+                    # Flag overly broad ranges (/8, /16 or lower)
+                    if cidr:
+                        parts = cidr.split("/")
+                        if len(parts) == 2:
+                            try:
+                                prefix = int(parts[1])
+                                if prefix <= 16:
+                                    overly_broad_ips.append(f"{name}: {cidr}")
+                            except ValueError:
+                                pass
+
+            elif "countryNamedLocation" in odata_type:
+                countries = detail.get("countriesAndRegions", []) or []
+                country_locations.append({
+                    "name": name,
+                    "count": len(countries),
+                    "include_unknown": detail.get("includeUnknownCountriesAndRegions", False),
+                })
+
+        # M365-LOC-002: Overly broad IP ranges marked as trusted
+        if overly_broad_ips:
+            self._add(Finding(
+                rule_id="M365-LOC-002",
+                name=f"Overly broad IP ranges in named locations ({len(overly_broad_ips)})",
+                category="Named Locations",
+                severity="HIGH",
+                file_path="identity/conditionalAccess/namedLocations",
+                line_num=None,
+                line_content=f"Broad ranges: {'; '.join(overly_broad_ips[:5])}",
+                description=(
+                    f"{len(overly_broad_ips)} named location IP range(s) use CIDR prefixes "
+                    "of /16 or broader. Overly broad IP ranges encompass thousands or millions "
+                    "of IP addresses, potentially including attacker-controlled infrastructure. "
+                    "If these ranges are marked as trusted, attackers within the range bypass "
+                    "MFA and other location-based controls."
+                ),
+                recommendation=(
+                    "Narrow IP ranges to specific corporate egress IPs (/32 for individual IPs "
+                    "or /24-/28 for small ranges). Audit all trusted IP ranges quarterly. "
+                    "Remove any ranges that include ISP or cloud provider address space. "
+                    "Use /32 for static corporate NAT IPs where possible."
+                ),
+                cwe="CWE-284",
+            ))
+
+        # M365-LOC-003: Country location includes unknown regions
+        for cloc in country_locations:
+            if cloc["include_unknown"]:
+                self._add(Finding(
+                    rule_id="M365-LOC-003",
+                    name=f"Named location '{cloc['name']}' includes unknown countries/regions",
+                    category="Named Locations",
+                    severity="MEDIUM",
+                    file_path="identity/conditionalAccess/namedLocations",
+                    line_num=None,
+                    line_content=f"'{cloc['name']}': {cloc['count']} countries, includeUnknownCountriesAndRegions = true",
+                    description=(
+                        f"The country-based named location '{cloc['name']}' includes "
+                        "'unknown countries and regions'. This means IP addresses that cannot "
+                        "be mapped to a country (VPNs, Tor exit nodes, anonymizers) are included "
+                        "in this location. If used in a CA 'allow' policy, this effectively "
+                        "bypasses geographic restrictions."
+                    ),
+                    recommendation=(
+                        f"Edit '{cloc['name']}' and uncheck 'Include unknown countries and regions'. "
+                        "Unknown IPs should be treated as untrusted and subject to stricter "
+                        "access controls (require MFA, block, or require compliant device)."
+                    ),
+                    cwe="CWE-284",
+                ))
+                break  # One finding is sufficient
+
+    # ----------------------------------------------------------
+    # 24. Stale / Inactive Users
+    # ----------------------------------------------------------
+    def _check_stale_users(self):
+        self._vprint("  [check] Stale and inactive users …")
+
+        # Get users with sign-in activity (requires AuditLog.Read.All + Directory.Read.All)
+        # signInActivity is a beta property
+        stale_cutoff = (datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%dT00:00:00Z")
+        very_stale_cutoff = (datetime.now(timezone.utc) - timedelta(days=180)).strftime("%Y-%m-%dT00:00:00Z")
+
+        users = self._graph_get(
+            "users",
+            params={
+                "$select": "id,displayName,userPrincipalName,accountEnabled,"
+                           "signInActivity,createdDateTime,userType",
+                "$filter": "accountEnabled eq true and userType eq 'Member'",
+                "$top": 999,
+            },
+            beta=True,
+        )
+        if not users:
+            self._vprint("  [skip] User sign-in activity not accessible (beta API + AuditLog.Read.All required).")
+            return
+
+        inactive_90 = []
+        inactive_180 = []
+        never_signed_in = []
+
+        for u in users:
+            upn = u.get("userPrincipalName", "?")
+            activity = u.get("signInActivity", {}) or {}
+            last_sign_in = activity.get("lastSignInDateTime") or activity.get("lastNonInteractiveSignInDateTime")
+
+            if not last_sign_in:
+                # Check if account is old enough to be a concern (>30 days old)
+                created = u.get("createdDateTime", "")
+                if created and created < stale_cutoff:
+                    never_signed_in.append(upn)
+            elif last_sign_in < very_stale_cutoff:
+                inactive_180.append(upn)
+            elif last_sign_in < stale_cutoff:
+                inactive_90.append(upn)
+
+        if inactive_180 or inactive_90:
+            total_inactive = len(inactive_180) + len(inactive_90)
+            sev = "HIGH" if len(inactive_180) > 10 else "MEDIUM"
+            parts = []
+            if inactive_180:
+                parts.append(f"180+ days: {len(inactive_180)}")
+            if inactive_90:
+                parts.append(f"90-180 days: {len(inactive_90)}")
+            self._add(Finding(
+                rule_id="M365-STALE-001",
+                name=f"Inactive enabled accounts with no sign-in in 90+ days ({total_inactive})",
+                category="Stale Users",
+                severity=sev,
+                file_path="users (beta: signInActivity)",
+                line_num=None,
+                line_content=f"{'; '.join(parts)}",
+                description=(
+                    f"{total_inactive} enabled user account(s) have not signed in for over 90 days "
+                    f"({len(inactive_180)} for 180+ days, {len(inactive_90)} for 90-180 days). "
+                    "Inactive accounts are prime targets for credential stuffing and brute-force "
+                    "attacks because compromised access may go unnoticed for extended periods. "
+                    "These accounts also inflate licence costs."
+                ),
+                recommendation=(
+                    "Review inactive accounts and take action: "
+                    "1. Disable accounts inactive for 180+ days immediately "
+                    "2. Notify managers of accounts inactive for 90-180 days "
+                    "3. Implement an automated Lifecycle Workflow to disable accounts "
+                    "   after 90 days of inactivity "
+                    "4. Review licence assignments for disabled accounts."
+                ),
+                cwe="CWE-613",
+            ))
+
+        if never_signed_in:
+            self._add(Finding(
+                rule_id="M365-STALE-002",
+                name=f"Enabled accounts that have never signed in ({len(never_signed_in)})",
+                category="Stale Users",
+                severity="MEDIUM",
+                file_path="users (beta: signInActivity)",
+                line_num=None,
+                line_content=f"Never signed in: {', '.join(never_signed_in[:5])}" + (
+                    f" (+{len(never_signed_in)-5} more)" if len(never_signed_in) > 5 else ""
+                ),
+                description=(
+                    f"{len(never_signed_in)} enabled account(s) were created over 90 days ago "
+                    "but have never had a sign-in event. These may be provisioned-but-unused "
+                    "accounts, test accounts, or abandoned onboarding accounts. Each represents "
+                    "a dormant credential that could be compromised without detection."
+                ),
+                recommendation=(
+                    "Investigate each never-signed-in account: "
+                    "1. If the account was provisioned for a user who hasn't started — confirm "
+                    "   with HR and disable until onboarding date "
+                    "2. If the account is a test/service account — convert to a properly "
+                    "   managed service principal or disable "
+                    "3. Set up an automated policy to disable accounts with no sign-in "
+                    "   within 30 days of creation."
+                ),
+                cwe="CWE-613",
+            ))
+
+        # Check for disabled accounts that still have privileged roles
+        disabled_users = self._graph_get(
+            "users",
+            params={
+                "$select": "id,displayName,userPrincipalName,accountEnabled",
+                "$filter": "accountEnabled eq false",
+                "$top": 999,
+            },
+        )
+        if disabled_users:
+            disabled_ids = {u["id"] for u in disabled_users if u.get("id")}
+            roles = self._graph_get("directoryRoles")
+            disabled_with_roles = []
+            for role in (roles or []):
+                role_template_id = role.get("roleTemplateId", "")
+                role_name = PRIVILEGED_ROLE_IDS.get(role_template_id)
+                if not role_name:
+                    continue
+                members = self._graph_get(f"directoryRoles/{role['id']}/members",
+                                          params={"$select": "id,displayName,userPrincipalName"})
+                for m in members:
+                    if m.get("id") in disabled_ids:
+                        disabled_with_roles.append(
+                            f"{m.get('userPrincipalName', '?')} ({role_name})"
+                        )
+
+            if disabled_with_roles:
+                self._add(Finding(
+                    rule_id="M365-STALE-003",
+                    name=f"Disabled accounts still assigned privileged roles ({len(disabled_with_roles)})",
+                    category="Stale Users",
+                    severity="HIGH",
+                    file_path="directoryRoles/members",
+                    line_num=None,
+                    line_content=f"Disabled with roles: {'; '.join(disabled_with_roles[:5])}",
+                    description=(
+                        f"{len(disabled_with_roles)} disabled account(s) still hold privileged "
+                        "directory role assignments. While disabled accounts cannot sign in, "
+                        "the role assignments create a risk: if the account is re-enabled "
+                        "(accidentally or by an attacker with admin rights), it immediately "
+                        "regains full privileged access."
+                    ),
+                    recommendation=(
+                        "Remove all privileged role assignments from disabled accounts. "
+                        "Implement a Lifecycle Workflow that automatically strips role "
+                        "assignments when an account is disabled. Review quarterly."
+                    ),
+                    cwe="CWE-269",
+                ))
+
     # ----------------------------------------------------------
     # Helpers
     # ----------------------------------------------------------
@@ -2767,6 +3452,18 @@ class O365Scanner:
             print(f"  Context  : {f.line_content}")
             if f.cwe:
                 print(f"  CWE      : {f.cwe}")
+            if f.compliance:
+                c = f.compliance
+                parts = []
+                if c.get("cis_m365"):
+                    parts.append(f"CIS M365 {c['cis_m365']}")
+                if c.get("nist_800_53"):
+                    parts.append(f"NIST {c['nist_800_53']}")
+                if c.get("iso_27001"):
+                    parts.append(f"ISO {c['iso_27001']}")
+                if c.get("soc2"):
+                    parts.append(f"SOC2 {c['soc2']}")
+                print(f"  Compliance: {' | '.join(parts)}")
             print(f"  Issue    : {f.description}")
             print(f"  Fix      : {f.recommendation}")
             print()
@@ -2849,14 +3546,17 @@ class O365Scanner:
                 f'<td style="padding:10px 14px;font-family:monospace;font-size:0.82em;'
                 f'color:#a6e3a1">{esc(f.line_content or "")}</td>'
                 f'<td style="padding:10px 14px;color:#cdd6f4">{esc(f.cwe)}</td>'
+                f'<td style="padding:10px 14px;font-size:0.82em;color:#f9e2af">'
+                f'{esc(f.compliance.get("cis_m365", ""))}</td>'
                 f'</tr>'
                 f'<tr style="background:{bg}" data-severity="{esc(f.severity)}" '
                 f'data-category="{esc(f.category)}">'
-                f'<td colspan="7" style="padding:6px 14px 14px 14px">'
+                f'<td colspan="8" style="padding:6px 14px 14px 14px">'
                 f'<div style="color:#bac2de;font-size:0.88em;margin-bottom:4px">'
                 f'<b>Issue:</b> {esc(f.description)}</div>'
-                f'<div style="color:#89dceb;font-size:0.88em">'
+                f'<div style="color:#89dceb;font-size:0.88em;margin-bottom:4px">'
                 f'<b>Fix:</b> {esc(f.recommendation)}</div>'
+                f'{"<div style=&quot;font-size:0.82em;color:#a6adc8&quot;><b>Compliance:</b> " + " &nbsp;|&nbsp; ".join(f"<span style=&quot;color:#f9e2af&quot;>{esc(k.upper().replace(chr(95),chr(32)))}</span>: {esc(v)}" for k,v in f.compliance.items()) + "</div>" if f.compliance else ""}'
                 f'</td></tr>'
             )
 
@@ -2931,7 +3631,7 @@ class O365Scanner:
 <table id="ft">
 <thead><tr>
   <th>Severity</th><th>Rule ID</th><th>Category</th><th>Finding</th>
-  <th>Endpoint</th><th>Context</th><th>CWE</th>
+  <th>Endpoint</th><th>Context</th><th>CWE</th><th>CIS M365</th>
 </tr></thead>
 <tbody>{rows_html}</tbody>
 </table>'''}
@@ -2979,7 +3679,8 @@ def main():
             "  SecurityEvents.Read.All            DeviceManagementConfiguration.Read.All\n"
             "  DeviceManagementManagedDevices.Read.All\n"
             "  InformationProtectionPolicy.Read.All\n"
-            "  CrossTenantInformation.ReadBasic.All\n\n"
+            "  CrossTenantInformation.ReadBasic.All\n"
+            "  AccessReview.Read.All              EntitlementManagement.Read.All\n\n"
             "Environment variables: M365_TENANT_ID  M365_CLIENT_ID  M365_CLIENT_SECRET"
         ),
     )

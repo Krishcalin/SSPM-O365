@@ -7,22 +7,24 @@
 </p>
 
 <p align="center">
-  <a href="#features"><img src="https://img.shields.io/badge/Check_Groups-20-0078d4?style=for-the-badge" alt="Check Groups"/></a>
-  <a href="#check-groups"><img src="https://img.shields.io/badge/Security_Rules-75+-e67e22?style=for-the-badge" alt="Rules"/></a>
+  <a href="#features"><img src="https://img.shields.io/badge/Check_Groups-24-0078d4?style=for-the-badge" alt="Check Groups"/></a>
+  <a href="#check-groups"><img src="https://img.shields.io/badge/Security_Rules-87+-e67e22?style=for-the-badge" alt="Rules"/></a>
   <a href="#prerequisites"><img src="https://img.shields.io/badge/Python-3.9+-3776ab?style=for-the-badge&logo=python&logoColor=white" alt="Python"/></a>
+  <a href="#compliance-mapping"><img src="https://img.shields.io/badge/CIS_M365-Mapped-f9e2af?style=for-the-badge" alt="CIS M365"/></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-27ae60?style=for-the-badge" alt="License"/></a>
-  <img src="https://img.shields.io/badge/Version-2.0.0-50e6ff?style=for-the-badge" alt="Version"/>
+  <img src="https://img.shields.io/badge/Version-2.1.0-50e6ff?style=for-the-badge" alt="Version"/>
 </p>
 
 ---
 
 # SSPM-O365
 
-An open-source, active Python-based SaaS Security Posture Management (SSPM) scanner for Microsoft 365 tenants. Performs **live** security assessments via the Microsoft Graph API across 20 check groups covering Entra ID, Exchange Online, SharePoint, OneDrive, Teams, Intune, Defender, Purview, and more.
+An open-source, active Python-based SaaS Security Posture Management (SSPM) scanner for Microsoft 365 tenants. Performs **live** security assessments via the Microsoft Graph API across 24 check groups covering Entra ID, Exchange Online, SharePoint, OneDrive, Teams, Intune, Defender, Purview, and more.
 
 ## Features
 
-- **20 check groups** with **75+ security rules** across the entire M365 stack
+- **24 check groups** with **87+ security rules** across the entire M365 stack
+- **Compliance mapping** — every finding mapped to CIS M365 v3.1.0, NIST 800-53, ISO 27001, SOC 2
 - **Live API scanning** — connects to your tenant via OAuth 2.0 client credentials
 - **Read-only** — requires only `Read` permissions, makes no changes to your tenant
 - **Zero dependencies** beyond `requests` — single-file, no agents, no cloud services
@@ -54,6 +56,26 @@ An open-source, active Python-based SaaS Security Posture Management (SSPM) scan
 | 18 | Session Security | `M365-SESSION` | Sign-in frequency, persistent browser, token lifetime policies |
 | 19 | Cross-Tenant Access | `M365-XTA` | MFA trust, device trust, outbound B2B collaboration |
 | 20 | OAuth App Governance | `M365-CONSENT` | User consent, admin consent workflow, unverified publisher apps |
+| 21 | Authentication Strengths | `M365-AUTH` | Phishing-resistant MFA enforcement, auth strength in CA, weak methods audit |
+| 22 | Entra ID Governance | `M365-GOV` | Access Reviews, privileged role reviews, Entitlement Management packages |
+| 23 | Named Locations | `M365-LOC` | Missing locations, overly broad IP ranges, unknown country inclusion |
+| 24 | Stale Users | `M365-STALE` | Inactive 90/180-day accounts, never-signed-in users, disabled accounts with roles |
+
+## Compliance Mapping
+
+Every finding is mapped to four compliance frameworks:
+
+| Framework | Standard | Coverage |
+|-----------|----------|----------|
+| **CIS** | CIS Microsoft 365 Foundations Benchmark v3.1.0 | All 87+ rules |
+| **NIST** | NIST SP 800-53 Rev 5 | All 87+ rules |
+| **ISO** | ISO/IEC 27001:2022 | All 87+ rules |
+| **SOC 2** | Trust Services Criteria (TSC) | All 87+ rules |
+
+Compliance data appears in:
+- **Terminal** — `Compliance:` line per finding
+- **JSON** — `compliance` object per finding with all 4 frameworks
+- **HTML** — CIS M365 column + full compliance detail in expanded row
 
 ## Prerequisites
 
@@ -90,6 +112,8 @@ pip install -r requirements.txt
 | `DeviceManagementManagedDevices.Read.All` | Intune managed devices |
 | `InformationProtectionPolicy.Read.All` | Sensitivity labels |
 | `CrossTenantInformation.ReadBasic.All` | Cross-tenant access settings |
+| `AccessReview.Read.All` | Access Reviews (Entra ID Governance) |
+| `EntitlementManagement.Read.All` | Entitlement Management packages |
 
 6. **Grant admin consent** for all permissions
 
@@ -182,15 +206,16 @@ The scanner exits with code `1` if any CRITICAL or HIGH findings are found, maki
 ## Architecture
 
 ```
-o365_scanner.py          # Single-file scanner (~3,400 lines)
-├── Finding              # Data class for findings
+o365_scanner.py          # Single-file scanner (~3,770 lines)
+├── COMPLIANCE_MAP       # Rule → CIS/NIST/ISO/SOC2 mapping dict
+├── Finding              # Data class with auto-enriched compliance
 ├── O365Scanner          # Main scanner class
 │   ├── _authenticate()  # OAuth 2.0 client credentials
 │   ├── _graph_get()     # Paginated Graph API helper
-│   ├── _check_*()       # 20 check group methods
-│   ├── print_report()   # Terminal output
-│   ├── save_json()      # JSON export
-│   └── save_html()      # HTML export
+│   ├── _check_*()       # 24 check group methods
+│   ├── print_report()   # Terminal output with compliance
+│   ├── save_json()      # JSON export with compliance
+│   └── save_html()      # HTML export with compliance column
 └── main()               # CLI entry point (argparse)
 ```
 
