@@ -173,11 +173,33 @@ python o365_scanner.py -t TENANT -c CLIENT -s SECRET -v
 
 ```
 [CRITICAL]  M365-CA-004  No enforced Conditional Access policy requires MFA for all users
-  Endpoint : identity/conditionalAccessPolicies
-  Context  : MFA for All Users CA policy = not found (enforced)
-  CWE      : CWE-308
-  Issue    : No active (enforced) CA policy requires MFA for all users...
-  Fix      : Create a CA policy: Users = All Users, Grant = Require MFA...
+  Endpoint  : identity/conditionalAccessPolicies
+  Context   : MFA for All Users CA policy = not found (enforced)
+  CWE       : CWE-308
+  Compliance: CIS M365 1.2.2 | NIST IA-2(1) | ISO A.8.5 | SOC2 CC6.1, CC6.2
+  Issue     : No active (enforced) CA policy requires MFA for all users...
+  Fix       : Create a CA policy: Users = All Users, Grant = Require MFA...
+```
+
+### JSON
+
+```json
+{
+  "id": "M365-CA-004",
+  "name": "No enforced Conditional Access policy requires MFA for all users",
+  "category": "Conditional Access",
+  "severity": "CRITICAL",
+  "file": "identity/conditionalAccessPolicies",
+  "description": "No active (enforced) CA policy requires MFA for all users...",
+  "recommendation": "Create a CA policy: Users = All Users, Grant = Require MFA...",
+  "cwe": "CWE-308",
+  "compliance": {
+    "cis_m365": "1.2.2",
+    "nist_800_53": "IA-2(1)",
+    "iso_27001": "A.8.5",
+    "soc2": "CC6.1, CC6.2"
+  }
+}
 ```
 
 ### HTML Report
@@ -186,7 +208,8 @@ Self-contained dark-themed HTML with:
 - Severity chip counters
 - Severity and category dropdown filters
 - Free-text search
-- Expandable issue/fix details per finding
+- CIS M365 benchmark column
+- Expandable issue/fix/compliance details per finding
 
 ## CI/CD Integration
 
@@ -202,6 +225,24 @@ The scanner exits with code `1` if any CRITICAL or HIGH findings are found, maki
       --client-secret ${{ secrets.M365_CLIENT_SECRET }} \
       --severity HIGH --json sspm-report.json
 ```
+
+## Changelog
+
+### v2.1.0
+
+- **Compliance mapping**: Every rule mapped to CIS M365 v3.1.0, NIST 800-53 Rev 5, ISO 27001:2022, SOC 2
+- **Authentication Strengths** (`M365-AUTH`): Phishing-resistant MFA enforcement, auth strength in CA policies, weak SMS/Voice method detection
+- **Entra ID Governance** (`M365-GOV`): Access Reviews status, privileged role review gaps, Entitlement Management packages
+- **Named Locations** (`M365-LOC`): Missing locations, overly broad IP ranges (/16+), unknown country inclusion
+- **Stale Users** (`M365-STALE`): 90/180-day inactive accounts, never-signed-in users, disabled accounts holding privileged roles
+- Terminal, JSON, and HTML reports now include compliance data per finding
+
+### v2.0.0
+
+- Initial release with 20 check groups and 75+ security rules
+- Entra ID, Exchange, SharePoint, OneDrive, Teams, Intune, Defender, Purview
+- Secure Score, DLP, Session Security, Cross-Tenant Access, OAuth Governance
+- Professional banner, dark-themed HTML report with filters
 
 ## Architecture
 
